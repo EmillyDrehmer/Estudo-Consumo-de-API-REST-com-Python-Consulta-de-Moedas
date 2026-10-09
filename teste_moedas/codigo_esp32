@@ -1,0 +1,444 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ======================================================
+// CONFIGURAÇÃO DO WI-FI
+// ======================================================
+
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+// ======================================================
+// CONFIGURAÇÃO DO OLED
+// ======================================================
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+#define SCREEN_ADDRESS 0x3C
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &Wire,
+  OLED_RESET
+);
+
+// ======================================================
+// API
+// ======================================================
+
+const char* apiUrl =
+  "https://economia.awesomeapi.com.br/json/last/"
+  "USD-BRL,EUR-BRL,GBP-BRL,ARS-BRL,BTC-BRL,JPY-BRL";
+
+// ======================================================
+// VARIÁVEIS DAS COTAÇÕES
+// ======================================================
+
+float dolar = 0;
+float euro = 0;
+float libra = 0;
+float peso = 0;
+float bitcoin = 0;
+float iene = 0;
+
+float varDolar = 0;
+float varEuro = 0;
+float varLibra = 0;
+float varPeso = 0;
+float varBitcoin = 0;
+float varIene = 0;
+
+bool dadosValidos = false;
+
+// ======================================================
+// CONTROLE DE TEMPO
+// ======================================================
+
+unsigned long ultimoUpdateAPI = 0;
+unsigned long ultimaTrocaTela = 0;
+
+const unsigned long intervaloAPI = 30000;   // 30 segundos
+const unsigned long intervaloTela = 5000;   // 5 segundos
+
+int telaAtual = 0;
+
+// ======================================================
+// ESTRUTURA PARA REPRESENTAR UMA MOEDA
+// ======================================================
+
+struct Moeda {
+  const char* nome;
+  float valor;
+  float variacao;
+};
+
+// ======================================================
+// SETUP
+// ======================================================
+
+void setup() {
+
+  Serial.begin(115200);
+  delay(500);
+
+  Serial.println();
+  Serial.println("=================================");
+  Serial.println("ESP32 - Cotacao de Moedas");
+  Serial.println("=================================");
+
+  // ----------------------------------------------------
+  // Inicialização do OLED
+  // ----------------------------------------------------
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+
+    Serial.println("Erro ao inicializar OLED.");
+
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(10, 0);
+
+  display.println("Cotacao de Moedas");
+
+  display.setTextSize(2);
+  display.setCursor(0, 20);
+
+  display.println("Iniciando...");
+
+  display.display();
+
+  // ----------------------------------------------------
+  // Wi-Fi
+  // ----------------------------------------------------
+
+  conectarWiFi();
+
+  // ----------------------------------------------------
+  // Primeira consulta
+  // ----------------------------------------------------
+
+  atualizarCotacoes();
+}
+
+// ======================================================
+// LOOP
+// ======================================================
+
+void loop() {
+
+  unsigned long agora = millis();
+
+  // ----------------------------------------------------
+  // Atualiza cotacoes
+  // ----------------------------------------------------
+
+  if (
+    agora - ultimoUpdateAPI >= intervaloAPI ||
+    ultimoUpdateAPI == 0
+  ) {
+
+    atualizarCotacoes();
+
+    ultimoUpdateAPI = agora;
+  }
+
+  // ----------------------------------------------------
+  // Troca de tela
+  // ----------------------------------------------------
+
+  if (
+    agora - ultimaTrocaTela >= intervaloTela ||
+    ultimaTrocaTela == 0
+  ) {
+
+    telaAtual++;
+
+    if (telaAtual > 5) {
+      telaAtual = 0;
+    }
+
+    mostrarMoeda();
+
+    ultimaTrocaTela = agora;
+  }
+
+  delay(10);
+}
+
+// ======================================================
+// CONEXÃO WI-FI
+// ======================================================
+
+void conectarWiFi() {
+
+  Serial.println();
+  Serial.print("Conectando ao Wi-Fi: ");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+
+    delay(500);
+
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("Wi-Fi conectado!");
+
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+// ======================================================
+// ATUALIZAÇÃO DAS COTAÇÕES
+// ======================================================
+
+void atualizarCotacoes() {
+
+  if (WiFi.status() != WL_CONNECTED) {
+
+    Serial.println("Wi-Fi desconectado.");
+    conectarWiFi();
+  }
+
+  Serial.println();
+  Serial.println("[HTTP] Consultando API...");
+
+  WiFiClientSecure client;
+
+  // Para fins didáticos/teste.
+  // Em produção, deve-se validar o certificado.
+  client.setInsecure();
+
+  HTTPClient http;
+
+  if (!http.begin(client, apiUrl)) {
+
+    Serial.println("[HTTP] Falha ao iniciar conexão.");
+
+    dadosValidos = false;
+
+    return;
+  }
+
+  int httpCode = http.GET();
+
+  Serial.print("[HTTP] Código: ");
+  Serial.println(httpCode);
+
+  if (httpCode == HTTP_CODE_OK) {
+
+    String resposta = http.getString();
+
+    Serial.println("[HTTP] Resposta recebida.");
+
+    processarJSON(resposta);
+
+  } else {
+
+    Serial.println("[HTTP] Erro na requisição.");
+
+    dadosValidos = false;
+  }
+
+  http.end();
+}
+
+// ======================================================
+// PROCESSAMENTO DO JSON
+// ======================================================
+
+void processarJSON(String resposta) {
+
+  JsonDocument doc;
+
+  DeserializationError erro = deserializeJson(doc, resposta);
+
+  if (erro) {
+
+    Serial.print("Erro ao interpretar JSON: ");
+    Serial.println(erro.c_str());
+
+    dadosValidos = false;
+
+    return;
+  }
+
+  // ----------------------------------------------------
+  // Dólar
+  // ----------------------------------------------------
+
+  dolar = doc["USDBRL"]["bid"].as<float>();
+  varDolar = doc["USDBRL"]["pctChange"].as<float>();
+
+  // ----------------------------------------------------
+  // Euro
+  // ----------------------------------------------------
+
+  euro = doc["EURBRL"]["bid"].as<float>();
+  varEuro = doc["EURBRL"]["pctChange"].as<float>();
+
+  // ----------------------------------------------------
+  // Libra
+  // ----------------------------------------------------
+
+  libra = doc["GBPBRL"]["bid"].as<float>();
+  varLibra = doc["GBPBRL"]["pctChange"].as<float>();
+
+  // ----------------------------------------------------
+  // Peso argentino
+  // ----------------------------------------------------
+
+  peso = doc["ARSBRL"]["bid"].as<float>();
+  varPeso = doc["ARSBRL"]["pctChange"].as<float>();
+
+  // ----------------------------------------------------
+  // Bitcoin
+  // ----------------------------------------------------
+
+  bitcoin = doc["BTCBRL"]["bid"].as<float>();
+  varBitcoin = doc["BTCBRL"]["pctChange"].as<float>();
+
+  // ----------------------------------------------------
+  // Iene
+  // ----------------------------------------------------
+
+  iene = doc["JPYBRL"]["bid"].as<float>();
+  varIene = doc["JPYBRL"]["pctChange"].as<float>();
+
+  dadosValidos = true;
+
+  Serial.println("Cotações atualizadas com sucesso.");
+
+  Serial.print("Dólar: R$ ");
+  Serial.println(dolar, 2);
+
+  Serial.print("Euro: R$ ");
+  Serial.println(euro, 2);
+
+  Serial.print("Libra: R$ ");
+  Serial.println(libra, 2);
+
+  Serial.print("Bitcoin: R$ ");
+  Serial.println(bitcoin, 2);
+
+  Serial.print("Iene: R$ ");
+  Serial.println(iene, 2);
+}
+
+// ======================================================
+// EXIBIÇÃO DA MOEDA
+// ======================================================
+
+void mostrarMoeda() {
+
+  Moeda moeda;
+
+  switch (telaAtual) {
+
+    case 0:
+      moeda = {"Dolar", dolar, varDolar};
+      break;
+
+    case 1:
+      moeda = {"Euro", euro, varEuro};
+      break;
+
+    case 2:
+      moeda = {"Libra", libra, varLibra};
+      break;
+
+    case 3:
+      moeda = {"Peso Arg.", peso, varPeso};
+      break;
+
+    case 4:
+      moeda = {"Bitcoin", bitcoin, varBitcoin};
+      break;
+
+    case 5:
+      moeda = {"Iene", iene, varIene};
+      break;
+  }
+
+  display.clearDisplay();
+
+  // ----------------------------------------------------
+  // Cabeçalho
+  // ----------------------------------------------------
+
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+
+  display.println("Cotacao de Moedas");
+
+  // ----------------------------------------------------
+  // Nome da moeda
+  // ----------------------------------------------------
+
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+
+  display.println(moeda.nome);
+
+  // ----------------------------------------------------
+  // Valor
+  // ----------------------------------------------------
+
+  display.setCursor(0, 29);
+
+  display.print("R$ ");
+
+  display.println(moeda.valor, 2);
+
+  // ----------------------------------------------------
+  // Linha divisória
+  // ----------------------------------------------------
+
+  display.drawLine(
+    0,
+    49,
+    SCREEN_WIDTH - 1,
+    49,
+    SSD1306_WHITE
+  );
+
+  // ----------------------------------------------------
+  // Variação
+  // ----------------------------------------------------
+
+  display.setTextSize(1);
+  display.setCursor(0, 53);
+
+  if (moeda.variacao > 0) {
+
+    display.print("VAR: +");
+
+  } else {
+
+    display.print("VAR: ");
+  }
+
+  display.print(moeda.variacao, 2);
+  display.println("%");
+
+  display.display();
+}
