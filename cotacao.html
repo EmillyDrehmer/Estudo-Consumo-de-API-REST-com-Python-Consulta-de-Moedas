@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cotação de Moedas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#06241b; --bg2:#0b3427; --card:#0d3a2c; --line:#1d5a45;
+  --text:#e6f4ec; --muted:#8fb8a4; --accent:#7fe0a8; --accent-ink:#04261a;
+  --up:#7fe0a8; --down:#ff9b8a;
+}
+*{box-sizing:border-box;margin:0}
+html,body{min-height:100%}
+body{
+  font-family:'Bricolage Grotesque',system-ui,-apple-system,'Segoe UI',sans-serif;
+  color:var(--text);
+  background:radial-gradient(900px 500px at 85% -10%,#14604a55,transparent),
+             radial-gradient(700px 500px at -10% 110%,#0f4a3a88,transparent),var(--bg);
+  display:grid;place-items:center;padding:24px;
+}
+main{width:100%;max-width:520px}
+h1{font-size:clamp(2rem,6vw,2.8rem);font-weight:800;letter-spacing:-.03em;line-height:1.05}
+.sub{color:var(--muted);margin:10px 0 28px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.group{color:var(--muted);font-size:.85rem;margin:14px 0 8px}
+.chip{
+  font:inherit;font-weight:500;font-size:.92rem;color:var(--text);cursor:pointer;
+  background:var(--bg2);border:1px solid var(--line);border-radius:999px;padding:8px 14px;
+  transition:background .15s,border-color .15s,color .15s;
+}
+.chip:hover{border-color:var(--accent)}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.row{display:flex;gap:10px;margin:22px 0 24px}
+input{
+  flex:1;min-width:0;font:inherit;font-size:1rem;color:var(--text);
+  background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:14px 16px;
+}
+input::placeholder{color:#5f8f7a}
+button.go{
+  font:inherit;font-weight:700;cursor:pointer;color:var(--accent-ink);background:var(--accent);
+  border:0;border-radius:14px;padding:0 22px;transition:transform .1s,filter .15s;
+}
+button.go:hover{filter:brightness(1.08)}
+button.go:active{transform:scale(.97)}
+button.go:disabled{opacity:.6;cursor:wait}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.result{
+  background:linear-gradient(160deg,var(--card),var(--bg2));
+  border:1px solid var(--line);border-radius:24px;padding:26px;min-height:150px;
+}
+.name{color:var(--muted);font-size:.95rem}
+.price{font-size:clamp(2.4rem,9vw,3.4rem);font-weight:800;letter-spacing:-.03em;margin:6px 0 4px}
+.pct{display:inline-block;font-weight:700;font-size:.9rem;padding:4px 10px;border-radius:999px;background:#ffffff12}
+.pct.up{color:var(--up)} .pct.down{color:var(--down)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+.grid small{display:block;color:var(--muted);font-size:.8rem;margin-bottom:2px}
+.grid b{font-weight:700;font-size:1.02rem}
+.time{color:var(--muted);font-size:.8rem;margin-top:16px}
+.msg{color:var(--muted)}
+.msg.err{color:var(--down)}
+.spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:s .8s linear infinite;display:inline-block}
+@keyframes s{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2s}}
+@media (max-width:420px){.grid{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Cotação de moedas</h1>
+  <p class="sub">Valores atualizados em reais, direto da AwesomeAPI.</p>
+
+  <p class="group" style="margin-top:0">Tradicionais</p>
+  <div class="chips" id="trad"></div>
+  <p class="group">Criptomoedas</p>
+  <div class="chips" id="cripto"></div>
+
+  <form class="row" id="form">
+    <input id="campo" type="text" placeholder="Outro par, ex.: JPY-BRL" autocomplete="off" aria-label="Par de moedas">
+    <button class="go" id="btn" type="submit">Consultar</button>
+  </form>
+
+  <section class="result" id="out" aria-live="polite">
+    <p class="msg">Escolha uma moeda para ver a cotação.</p>
+  </section>
+</main>
+
+<script>
+const MOEDAS = {
+  trad: [["USD-BRL","Dólar"],["EUR-BRL","Euro"],["GBP-BRL","Libra"],["ARS-BRL","Peso argentino"]],
+  cripto: [["BTC-BRL","Bitcoin"],["ETH-BRL","Ethereum"]]
+};
+const out = document.getElementById("out"),
+      campo = document.getElementById("campo"),
+      btn = document.getElementById("btn");
+
+const brl = n => "R$ " + Number(n).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+function montarChips(id, lista){
+  const el = document.getElementById(id);
+  lista.forEach(([par,nome])=>{
+    const b = document.createElement("button");
+    b.type="button"; b.className="chip"; b.textContent = par + " · " + nome;
+    b.dataset.par = par; b.setAttribute("aria-pressed","false");
+    b.onclick = () => consultar(par);
+    el.appendChild(b);
+  });
+}
+montarChips("trad", MOEDAS.trad);
+montarChips("cripto", MOEDAS.cripto);
+
+function marcar(par){
+  document.querySelectorAll(".chip").forEach(c =>
+    c.setAttribute("aria-pressed", c.dataset.par === par ? "true" : "false"));
+}
+
+function erro(par, e){
+  let motivo = "Confira o formato (ex.: USD-BRL) e tente de novo.";
+  if(e && e.message === "Failed to fetch") motivo = "A página não conseguiu acessar a internet/API. Abra este arquivo no navegador (Chrome, Edge, Firefox), não na pré-visualização do chat.";
+  else if(e && /status 429/.test(e.message)) motivo = "Muitas consultas seguidas. Aguarde alguns segundos.";
+  else if(e && /status 404/.test(e.message)) motivo = "Par de moedas não encontrado.";
+  out.innerHTML = `<p class="msg err">Não foi possível consultar "${par.replace(/[<>&"]/g,"")}". ${motivo}</p><p class="msg" style="margin-top:10px;font-size:.8rem">Detalhe técnico: ${e ? e.message : "-"}</p>`;
+}
+
+async function consultar(par){
+  par = par.trim().toUpperCase();
+  if(!par) return;
+  marcar(par);
+  btn.disabled = true;
+  out.innerHTML = `<span class="spin" role="status" aria-label="Carregando"></span>`;
+  try{
+    const r = await fetch(`https://economia.awesomeapi.com.br/json/last/${encodeURIComponent(par)}`);
+    if(!r.ok) throw new Error("status " + r.status);
+    const dados = await r.json();
+    const d = dados[par.replace("-","")];
+    if(!d) throw new Error("sem dados");
+    const pct = parseFloat(d.pctChange), cls = pct >= 0 ? "up" : "down";
+    out.innerHTML = `
+      <div class="name">${d.name}</div>
+      <div class="price">${brl(d.bid)}</div>
+      <span class="pct ${cls}">${pct >= 0 ? "▲" : "▼"} ${pct.toLocaleString("pt-BR")}% hoje</span>
+      <div class="grid">
+        <div><small>Compra</small><b>${brl(d.bid)}</b></div>
+        <div><small>Venda</small><b>${brl(d.ask)}</b></div>
+        <div><small>Máxima</small><b>${brl(d.high)}</b></div>
+        <div><small>Mínima</small><b>${brl(d.low)}</b></div>
+      </div>
+      <p class="time">Atualizado em ${d.create_date}</p>`;
+  }catch(e){
+    erro(par, e);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("form").addEventListener("submit", e => {
+  e.preventDefault();
+  consultar(campo.value);
+});
+</script>
+</body>
+</html>
